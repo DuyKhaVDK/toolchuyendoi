@@ -92,27 +92,40 @@ const apiPath = ['/convert-text', '/api/convert-text', '/.netlify/functions/api/
 
 app.post(apiPath, async (req, res) => {
     
-    // --- KHẮC PHỤC LỖI EMPTY TEXT TẠI ĐÂY ---
+    // --- KHẮC PHỤC LỖI BUFFER <Buffer > TẠI ĐÂY ---
     let bodyData = req.body;
-
-    // Nếu body là chuỗi (do Netlify gửi sai định dạng), ta tự parse nó
-    if (typeof bodyData === 'string') {
-        try {
-            bodyData = JSON.parse(bodyData);
-        } catch (e) {
-            console.error('JSON Parse Error:', e);
-        }
+    
+    console.log('[DEBUG] Raw Body Type:', typeof bodyData); // Log để kiểm tra
+    if (Buffer.isBuffer(bodyData)) {
+         console.log('[DEBUG] Body is Buffer, converting...'); 
     }
 
-    // Nếu parse xong mà vẫn không có text thì mới báo lỗi
-    const text = bodyData ? bodyData.text : null;
-    const subIds = bodyData ? bodyData.subIds : [];
+    try {
+        // TRƯỜNG HỢP 1: Dữ liệu là Buffer (Lỗi bạn đang gặp) -> Chuyển sang chuỗi rồi Parse
+        if (Buffer.isBuffer(bodyData)) {
+            const rawString = bodyData.toString('utf8');
+            bodyData = JSON.parse(rawString);
+        } 
+        // TRƯỜNG HỢP 2: Dữ liệu là Chuỗi (String) -> Parse
+        else if (typeof bodyData === 'string') {
+            bodyData = JSON.parse(bodyData);
+        }
+        // TRƯỜNG HỢP 3: Đã là Object thì giữ nguyên
+    } catch (e) {
+        console.error('[ERROR] Parse Body Failed:', e.message);
+        // Không return lỗi ngay, để code chạy tiếp xem có cứu được không
+    }
+
+    // Lấy dữ liệu an toàn
+    const text = bodyData && bodyData.text ? bodyData.text : null;
+    const subIds = bodyData && bodyData.subIds ? bodyData.subIds : [];
 
     if (!text) {
-        console.error('[ERROR] Body content missing or invalid:', bodyData);
+        // In ra log để xem rốt cuộc nó nhận được cái gì mà vẫn null
+        console.error('[FINAL ERROR] Body parsed result:', bodyData);
         return res.status(400).json({ 
-            error: 'Empty text', 
-            debug: { receivedType: typeof req.body, receivedBody: req.body } 
+            error: 'Server nhận được dữ liệu rỗng (undefined)', 
+            debugInfo: 'Check Netlify Logs' 
         });
     }
     // ------------------------------------------
