@@ -1,5 +1,4 @@
 // functions/api.js
-
 const express = require('express');
 const serverless = require('serverless-http');
 const axios = require('axios');
@@ -9,17 +8,15 @@ const cors = require('cors');
 const app = express();
 
 // --- CẤU HÌNH ---
-// HÃY ĐIỀN LẠI APP ID VÀ SECRET CỦA BẠN
+// ĐIỀN LẠI APP ID VÀ SECRET
 const APP_ID = '17301060084';     
 const APP_SECRET = '2OI7GNRRDK7VDMZRU3AYQ7RPPAPN4VBK'; 
 const SHOPEE_API_URL = 'https://open-api.affiliate.shopee.vn/graphql';
 
 app.use(cors());
+// Không cần dùng middleware parser của express nữa, ta sẽ tự parse bên dưới
 
-// Chế độ đọc Text để tránh lỗi Buffer
-app.use(express.text({ type: '*/*' }));
-
-// --- HÀM 1: GIẢI MÃ & LÀM SẠCH LINK ---
+// --- HÀM 1: GIẢI MÃ & LÀM SẠCH LINK (GIỮ NGUYÊN) ---
 async function resolveAndCleanUrl(inputUrl) {
     let finalUrl = inputUrl;
     if (inputUrl.includes('s.shopee.vn') || inputUrl.includes('shp.ee') || inputUrl.includes('vn.shp.ee')) {
@@ -30,7 +27,6 @@ async function resolveAndCleanUrl(inputUrl) {
     }
     
     let baseUrl = finalUrl.split('?')[0]; 
-    
     if (baseUrl.includes('/search')) {
         try {
             const urlObj = new URL(finalUrl);
@@ -58,7 +54,7 @@ async function resolveAndCleanUrl(inputUrl) {
     return finalUrl;
 }
 
-// --- HÀM 2: GỌI API SHOPEE ---
+// --- HÀM 2: GỌI API SHOPEE (GIỮ NGUYÊN) ---
 async function getShopeeShortLink(originalUrl, subIds = []) {
     const timestamp = Math.floor(Date.now() / 1000);
     let subIdsParam = "";
@@ -77,10 +73,7 @@ async function getShopeeShortLink(originalUrl, subIds = []) {
 
     try {
         const response = await axios.post(SHOPEE_API_URL, payloadString, {
-            headers: { 
-                'Content-Type': 'application/json', 
-                'Authorization': `SHA256 Credential=${APP_ID}, Timestamp=${timestamp}, Signature=${signature}` 
-            }
+            headers: { 'Content-Type': 'application/json', 'Authorization': `SHA256 Credential=${APP_ID}, Timestamp=${timestamp}, Signature=${signature}` }
         });
         if (response.data.errors) return null;
         return response.data.data.generateShortLink.shortLink;
@@ -91,32 +84,51 @@ async function getShopeeShortLink(originalUrl, subIds = []) {
 const apiPath = ['/convert-text', '/api/convert-text', '/.netlify/functions/api/convert-text'];
 
 app.post(apiPath, async (req, res) => {
+    
     let text = "";
     let subIds = [];
 
+    // --- CHIÊU CUỐI: LẤY DỮ LIỆU TỪ "RAW BODY" (DO SERVERLESS CUNG CẤP) ---
     try {
-        let rawBody = req.body;
-        if (typeof rawBody === 'object' && rawBody !== null) {
-            text = rawBody.text;
-            subIds = rawBody.subIds;
-        } else {
-            const parsed = JSON.parse(rawBody);
+        // req.rawBody là do chúng ta cấu hình ở dòng cuối cùng file này
+        let raw = req.rawBody;
+
+        if (!raw) {
+            // Fallback: Thử lấy từ req.body nếu rawBody không có
+            raw = req.body;
+        }
+
+        // Nếu raw là Base64 (Netlify hay làm trò này), decode nó
+        if (req.isBase64Encoded) {
+             raw = Buffer.from(raw, 'base64').toString('utf-8');
+        }
+
+        // Parse JSON
+        if (typeof raw === 'string') {
+            const parsed = JSON.parse(raw);
             text = parsed.text;
             subIds = parsed.subIds;
+        } else if (typeof raw === 'object') {
+            text = raw.text;
+            subIds = raw.subIds;
         }
     } catch (e) {
-        console.error('JSON Parse Error:', e.message);
-        return res.status(400).json({ error: 'Lỗi đọc dữ liệu (JSON Parse Failed)', details: e.message });
+        console.error('Parse Error:', e);
+        // Trả về lỗi chi tiết để debug
+        return res.status(400).json({ 
+            error: 'Lỗi đọc dữ liệu', 
+            details: e.message,
+            receivedType: typeof req.rawBody
+        });
     }
+    // -------------------------------------------------------------------
 
-    if (!text) return res.status(400).json({ error: 'Nội dung (text) bị trống' });
+    if (!text) return res.status(400).json({ error: 'Nội dung (text) bị trống', debug: 'Parse success but text is empty' });
 
     const urlRegex = /(https?:\/\/(?:www\.)?(?:shopee\.vn|vn\.shp\.ee|shp\.ee|s\.shopee\.vn)[^\s]*)/gi;
     const uniqueLinks = [...new Set(text.match(urlRegex) || [])];
 
-    if (uniqueLinks.length === 0) {
-        return res.json({ success: true, newText: text, message: 'No links found', converted: 0 });
-    }
+    if (uniqueLinks.length === 0) return res.json({ success: true, newText: text, message: 'No links found', converted: 0 });
 
     const conversions = await Promise.all(uniqueLinks.map(async (url) => {
         let cleanInput = url.replace(/[.,;!?)]+$/, ""); 
@@ -137,10 +149,14 @@ app.post(apiPath, async (req, res) => {
     res.json({ success: true, newText, totalLinks: uniqueLinks.length, converted: successCount, details: conversions });
 });
 
-// --- SỬA LỖI TẠI ĐÂY: Route 404 (Không dùng dấu * nữa) ---
-// Thay vì app.use('*', ...), ta bỏ dấu * đi, nó sẽ tự bắt tất cả các request còn lại
-app.use((req, res) => {
-    res.status(404).json({ error: 'Route not found', path: req.path });
-});
+// Route 404
+app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
 
-module.exports.handler = serverless(app);
+// --- CẤU HÌNH SERVERLESS ĐẶC BIỆT ---
+// Thêm hook để lấy rawBody và isBase64Encoded từ Netlify Event
+module.exports.handler = serverless(app, {
+    request: (req, event, context) => {
+        req.rawBody = event.body; // Gắn body gốc vào request
+        req.isBase64Encoded = event.isBase64Encoded; // Gắn cờ base64
+    },
+});
