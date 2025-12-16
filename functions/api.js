@@ -9,12 +9,14 @@ const app = express();
 
 // --- CẤU HÌNH ---
 // ĐIỀN LẠI APP ID VÀ SECRET
-const APP_ID = '17301060084';     
-const APP_SECRET = '2OI7GNRRDK7VDMZRU3AYQ7RPPAPN4VBK'; 
+const APP_ID = 'YOUR_APP_ID';     
+const APP_SECRET = 'YOUR_SECRET'; 
 const SHOPEE_API_URL = 'https://open-api.affiliate.shopee.vn/graphql';
 
 app.use(cors());
-// Không cần dùng middleware parser của express nữa, ta sẽ tự parse bên dưới
+
+// CHÚ Ý: KHÔNG DÙNG express.json() hay express.text() ở đây nữa
+// Chúng ta sẽ tự xử lý body thủ công để tránh xung đột
 
 // --- HÀM 1: GIẢI MÃ & LÀM SẠCH LINK (GIỮ NGUYÊN) ---
 async function resolveAndCleanUrl(inputUrl) {
@@ -80,6 +82,45 @@ async function getShopeeShortLink(originalUrl, subIds = []) {
     } catch (e) { return null; }
 }
 
+// --- HÀM HELPER: PARSE BODY AN TOÀN TUYỆT ĐỐI ---
+function safeParseBody(req) {
+    try {
+        // 1. Ưu tiên lấy từ Netlify Event gốc (được inject ở cuối file)
+        let rawBody = req.netlifyEvent ? req.netlifyEvent.body : req.body;
+        let isBase64 = req.netlifyEvent ? req.netlifyEvent.isBase64Encoded : false;
+
+        // Nếu không có gì, trả về rỗng
+        if (!rawBody) return {};
+
+        // 2. Nếu đã là Object (do middleware nào đó parse rồi), dùng luôn
+        if (typeof rawBody === 'object' && !Buffer.isBuffer(rawBody)) {
+            return rawBody;
+        }
+
+        // 3. Nếu là Buffer, chuyển về String
+        if (Buffer.isBuffer(rawBody)) {
+            rawBody = rawBody.toString('utf8');
+        }
+
+        // 4. Nếu là Base64, giải mã
+        if (isBase64 && typeof rawBody === 'string') {
+            rawBody = Buffer.from(rawBody, 'base64').toString('utf8');
+        }
+
+        // 5. Parse JSON
+        if (typeof rawBody === 'string') {
+            // Trường hợp string rỗng
+            if (rawBody.trim() === '') return {};
+            return JSON.parse(rawBody);
+        }
+
+        return {};
+    } catch (error) {
+        console.error('[PARSE ERROR]:', error.message);
+        throw new Error(`Parse Failed: ${typeof req.body} -> ${error.message}`);
+    }
+}
+
 // --- API ROUTE ---
 const apiPath = ['/convert-text', '/api/convert-text', '/.netlify/functions/api/convert-text'];
 
@@ -88,42 +129,26 @@ app.post(apiPath, async (req, res) => {
     let text = "";
     let subIds = [];
 
-    // --- CHIÊU CUỐI: LẤY DỮ LIỆU TỪ "RAW BODY" (DO SERVERLESS CUNG CẤP) ---
     try {
-        // req.rawBody là do chúng ta cấu hình ở dòng cuối cùng file này
-        let raw = req.rawBody;
+        // GỌI HÀM PARSE AN TOÀN
+        const bodyData = safeParseBody(req);
+        
+        text = bodyData.text;
+        subIds = bodyData.subIds;
 
-        if (!raw) {
-            // Fallback: Thử lấy từ req.body nếu rawBody không có
-            raw = req.body;
+        // Log để debug nếu vẫn lỗi
+        if (!text) {
+            console.log('[DEBUG] Parsed Body:', JSON.stringify(bodyData));
         }
 
-        // Nếu raw là Base64 (Netlify hay làm trò này), decode nó
-        if (req.isBase64Encoded) {
-             raw = Buffer.from(raw, 'base64').toString('utf-8');
-        }
-
-        // Parse JSON
-        if (typeof raw === 'string') {
-            const parsed = JSON.parse(raw);
-            text = parsed.text;
-            subIds = parsed.subIds;
-        } else if (typeof raw === 'object') {
-            text = raw.text;
-            subIds = raw.subIds;
-        }
     } catch (e) {
-        console.error('Parse Error:', e);
-        // Trả về lỗi chi tiết để debug
         return res.status(400).json({ 
-            error: 'Lỗi đọc dữ liệu', 
-            details: e.message,
-            receivedType: typeof req.rawBody
+            error: 'Lỗi đọc dữ liệu (Body Parsing)', 
+            details: e.message 
         });
     }
-    // -------------------------------------------------------------------
 
-    if (!text) return res.status(400).json({ error: 'Nội dung (text) bị trống', debug: 'Parse success but text is empty' });
+    if (!text) return res.status(400).json({ error: 'Nội dung (text) bị trống' });
 
     const urlRegex = /(https?:\/\/(?:www\.)?(?:shopee\.vn|vn\.shp\.ee|shp\.ee|s\.shopee\.vn)[^\s]*)/gi;
     const uniqueLinks = [...new Set(text.match(urlRegex) || [])];
@@ -152,11 +177,10 @@ app.post(apiPath, async (req, res) => {
 // Route 404
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
 
-// --- CẤU HÌNH SERVERLESS ĐẶC BIỆT ---
-// Thêm hook để lấy rawBody và isBase64Encoded từ Netlify Event
+// --- CẤU HÌNH QUAN TRỌNG: Inject Netlify Event ---
 module.exports.handler = serverless(app, {
     request: (req, event, context) => {
-        req.rawBody = event.body; // Gắn body gốc vào request
-        req.isBase64Encoded = event.isBase64Encoded; // Gắn cờ base64
+        // Gắn toàn bộ sự kiện gốc của Netlify vào req để hàm safeParseBody dùng
+        req.netlifyEvent = event;
     },
 });
