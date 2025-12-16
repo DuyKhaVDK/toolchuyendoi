@@ -10,8 +10,8 @@ const app = express();
 
 // --- CẤU HÌNH ---
 // HÃY ĐIỀN LẠI APP ID VÀ SECRET CỦA BẠN
-const APP_ID = 'YOUR_APP_ID';     
-const APP_SECRET = 'YOUR_SECRET'; 
+const APP_ID = '17301060084';     
+const APP_SECRET = '2OI7GNRRDK7VDMZRU3AYQ7RPPAPN4VBK'; 
 const SHOPEE_API_URL = 'https://open-api.affiliate.shopee.vn/graphql';
 
 app.use(cors());
