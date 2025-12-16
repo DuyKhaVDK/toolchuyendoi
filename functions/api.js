@@ -9,28 +9,18 @@ const cors = require('cors');
 const app = express();
 
 // --- CẤU HÌNH ---
-const APP_ID = 'YOUR_APP_ID';     // Nhớ điền lại App ID
-const APP_SECRET = 'YOUR_SECRET'; // Nhớ điền lại Secret
+const APP_ID = 'YOUR_APP_ID';     // ĐIỀN LẠI APP ID
+const APP_SECRET = 'YOUR_SECRET'; // ĐIỀN LẠI SECRET
 const SHOPEE_API_URL = 'https://open-api.affiliate.shopee.vn/graphql';
 
 app.use(cors());
 
-// --- THAY ĐỔI QUAN TRỌNG: PARSE BODY THỦ CÔNG ---
-// Thay vì dùng body-parser, ta dùng express.json() và thêm middleware xử lý lỗi
-app.use(express.json()); 
-app.use(express.urlencoded({ extended: true }));
+// --- CHIẾN THUẬT MỚI: ĐỌC TẤT CẢ LÀ TEXT ---
+// Thay vì express.json(), ta dùng express.text để lấy dữ liệu thô
+// type: '*/*' nghĩa là chấp nhận mọi loại Content-Type
+app.use(express.text({ type: '*/*' }));
 
-// Middleware Log để Debug (Xem server nhận được cái gì)
-app.use((req, res, next) => {
-    console.log(`[DEBUG] Method: ${req.method} | URL: ${req.url}`);
-    // Log xem body có dữ liệu không
-    if (req.body) {
-        console.log('[DEBUG] Body received type:', typeof req.body);
-    }
-    next();
-});
-
-// --- CÁC HÀM LOGIC (GIỮ NGUYÊN) ---
+// --- HÀM LOGIC (GIỮ NGUYÊN) ---
 async function resolveAndCleanUrl(inputUrl) {
     let finalUrl = inputUrl;
     if (inputUrl.includes('s.shopee.vn') || inputUrl.includes('shp.ee') || inputUrl.includes('vn.shp.ee')) {
@@ -92,43 +82,39 @@ const apiPath = ['/convert-text', '/api/convert-text', '/.netlify/functions/api/
 
 app.post(apiPath, async (req, res) => {
     
-    // --- KHẮC PHỤC LỖI BUFFER <Buffer > TẠI ĐÂY ---
-    let bodyData = req.body;
-    
-    console.log('[DEBUG] Raw Body Type:', typeof bodyData); // Log để kiểm tra
-    if (Buffer.isBuffer(bodyData)) {
-         console.log('[DEBUG] Body is Buffer, converting...'); 
-    }
+    let text = "";
+    let subIds = [];
 
+    // --- XỬ LÝ DỮ LIỆU THÔ (THỦ CÔNG) ---
     try {
-        // TRƯỜNG HỢP 1: Dữ liệu là Buffer (Lỗi bạn đang gặp) -> Chuyển sang chuỗi rồi Parse
-        if (Buffer.isBuffer(bodyData)) {
-            const rawString = bodyData.toString('utf8');
-            bodyData = JSON.parse(rawString);
-        } 
-        // TRƯỜNG HỢP 2: Dữ liệu là Chuỗi (String) -> Parse
-        else if (typeof bodyData === 'string') {
-            bodyData = JSON.parse(bodyData);
+        let rawBody = req.body; // Đây sẽ là chuỗi string nhờ express.text()
+        
+        // Nếu nó vẫn là object (trường hợp hiếm), ta dùng luôn
+        if (typeof rawBody === 'object') {
+            text = rawBody.text;
+            subIds = rawBody.subIds;
+        } else {
+            // Parse chuỗi JSON thủ công
+            const parsed = JSON.parse(rawBody);
+            text = parsed.text;
+            subIds = parsed.subIds;
         }
-        // TRƯỜNG HỢP 3: Đã là Object thì giữ nguyên
     } catch (e) {
-        console.error('[ERROR] Parse Body Failed:', e.message);
-        // Không return lỗi ngay, để code chạy tiếp xem có cứu được không
-    }
-
-    // Lấy dữ liệu an toàn
-    const text = bodyData && bodyData.text ? bodyData.text : null;
-    const subIds = bodyData && bodyData.subIds ? bodyData.subIds : [];
-
-    if (!text) {
-        // In ra log để xem rốt cuộc nó nhận được cái gì mà vẫn null
-        console.error('[FINAL ERROR] Body parsed result:', bodyData);
+        console.error('[ERROR] JSON Parse Failed:', e.message);
+        console.error('[ERROR] Raw Body Received:', req.body);
+        
+        // Trả về lỗi chi tiết để Frontend hiển thị (không bị undefined nữa)
         return res.status(400).json({ 
-            error: 'Server nhận được dữ liệu rỗng (undefined)', 
-            debugInfo: 'Check Netlify Logs' 
+            error: 'Lỗi đọc dữ liệu từ Client', 
+            details: e.message,
+            received: String(req.body).substring(0, 100) // Cắt ngắn để xem thử
         });
     }
-    // ------------------------------------------
+    // -------------------------------------
+
+    if (!text) {
+        return res.status(400).json({ error: 'Nội dung (text) bị trống' });
+    }
 
     const urlRegex = /(https?:\/\/(?:www\.)?(?:shopee\.vn|vn\.shp\.ee|shp\.ee|s\.shopee\.vn)[^\s]*)/gi;
     const uniqueLinks = [...new Set(text.match(urlRegex) || [])];
@@ -154,6 +140,4 @@ app.post(apiPath, async (req, res) => {
     res.json({ success: true, newText, totalLinks: uniqueLinks.length, converted: successCount, details: conversions });
 });
 
-app.use('*', (req, res) => res.status(404).json({ error: 'Not found', path: req.path }));
-
-module.exports.handler = serverless(app);
+app.use('*', (req, res) => res.status(404).json({ error: 'Route not found', path: req.
