@@ -207,6 +207,19 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // Đường dẫn này phải khớp với cấu hình trong netlify.toml
-app.use('/.netlify/functions/api', router); 
+// --- SỬA LẠI ĐOẠN NÀY ---
+
+// 1. Log ra xem đường dẫn thực tế là gì để debug (Xem trong tab Logs)
+app.use((req, res, next) => {
+    console.log(`Request URL: ${req.url}`);
+    next();
+});
+
+// 2. Chấp nhận router ở MỌI ĐƯỜNG DẪN (Dấu /)
+// Cách này giúp server không bị lỗi 404 dù đường dẫn có bị Netlify đổi chút xíu
+app.use('/', router); 
+app.use('/.netlify/functions/api', router); // Giữ cả cái này cho chắc
+
+module.exports.handler = serverless(app); 
 
 module.exports.handler = serverless(app);
