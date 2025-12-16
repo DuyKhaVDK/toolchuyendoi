@@ -9,20 +9,19 @@ const cors = require('cors');
 const app = express();
 
 // --- CẤU HÌNH ---
-// HÃY ĐIỀN CHÍNH XÁC APP ID VÀ SECRET CỦA BẠN VÀO DƯỚI ĐÂY
+// HÃY ĐIỀN LẠI APP ID VÀ SECRET CỦA BẠN
 const APP_ID = 'YOUR_APP_ID';     
 const APP_SECRET = 'YOUR_SECRET'; 
 const SHOPEE_API_URL = 'https://open-api.affiliate.shopee.vn/graphql';
 
 app.use(cors());
 
-// CHẾ ĐỘ ĐỌC DỮ LIỆU: TEXT (Để khắc phục lỗi Buffer của Netlify)
+// Chế độ đọc Text để tránh lỗi Buffer
 app.use(express.text({ type: '*/*' }));
 
 // --- HÀM 1: GIẢI MÃ & LÀM SẠCH LINK ---
 async function resolveAndCleanUrl(inputUrl) {
     let finalUrl = inputUrl;
-    // Follow redirect
     if (inputUrl.includes('s.shopee.vn') || inputUrl.includes('shp.ee') || inputUrl.includes('vn.shp.ee')) {
         try {
             const response = await axios.get(inputUrl, { maxRedirects: 5, validateStatus: null });
@@ -32,7 +31,6 @@ async function resolveAndCleanUrl(inputUrl) {
     
     let baseUrl = finalUrl.split('?')[0]; 
     
-    // Whitelist cho Search
     if (baseUrl.includes('/search')) {
         try {
             const urlObj = new URL(finalUrl);
@@ -46,15 +44,12 @@ async function resolveAndCleanUrl(inputUrl) {
         } catch (e) { return baseUrl; }
     }
     
-    // Shop -> Product
     const shopProductPattern = /shopee\.vn\/([^\/]+)\/(\d+)\/(\d+)/;
     const match = baseUrl.match(shopProductPattern);
     if (match) return `https://shopee.vn/product/${match[2]}/${match[3]}`;
     
-    // Clean params
     if (baseUrl.includes('/m/') || baseUrl.includes('/product/') || (baseUrl.split('/').length === 4)) return baseUrl; 
     
-    // Fallback clean
     if (finalUrl.includes('uls_trackid=')) finalUrl = finalUrl.split('uls_trackid=')[0];
     if (finalUrl.includes('utm_source=')) finalUrl = finalUrl.split('utm_source=')[0];
     if (!finalUrl.includes('/search') && finalUrl.includes('mmp_pid=')) finalUrl = finalUrl.split('mmp_pid=')[0];
@@ -99,10 +94,8 @@ app.post(apiPath, async (req, res) => {
     let text = "";
     let subIds = [];
 
-    // PARSE JSON THỦ CÔNG (TRÁNH LỖI BUFFER/UNDEFINED)
     try {
         let rawBody = req.body;
-        // Nếu là object thì dùng luôn, nếu là string/buffer thì parse
         if (typeof rawBody === 'object' && rawBody !== null) {
             text = rawBody.text;
             subIds = rawBody.subIds;
@@ -113,15 +106,10 @@ app.post(apiPath, async (req, res) => {
         }
     } catch (e) {
         console.error('JSON Parse Error:', e.message);
-        return res.status(400).json({ 
-            error: 'Lỗi đọc dữ liệu (JSON Parse Failed)', 
-            details: e.message 
-        });
+        return res.status(400).json({ error: 'Lỗi đọc dữ liệu (JSON Parse Failed)', details: e.message });
     }
 
-    if (!text) {
-        return res.status(400).json({ error: 'Nội dung (text) bị trống' });
-    }
+    if (!text) return res.status(400).json({ error: 'Nội dung (text) bị trống' });
 
     const urlRegex = /(https?:\/\/(?:www\.)?(?:shopee\.vn|vn\.shp\.ee|shp\.ee|s\.shopee\.vn)[^\s]*)/gi;
     const uniqueLinks = [...new Set(text.match(urlRegex) || [])];
@@ -149,8 +137,10 @@ app.post(apiPath, async (req, res) => {
     res.json({ success: true, newText, totalLinks: uniqueLinks.length, converted: successCount, details: conversions });
 });
 
-// Route 404
-app.use('*', (req, res) => res.status(404).json({ error: 'Route not found', path: req.path }));
+// --- SỬA LỖI TẠI ĐÂY: Route 404 (Không dùng dấu * nữa) ---
+// Thay vì app.use('*', ...), ta bỏ dấu * đi, nó sẽ tự bắt tất cả các request còn lại
+app.use((req, res) => {
+    res.status(404).json({ error: 'Route not found', path: req.path });
+});
 
-// XUẤT MODULE SERVERLESS
 module.exports.handler = serverless(app);
