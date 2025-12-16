@@ -124,10 +124,10 @@
                     inputArea.style.backgroundColor = "#e3f2fd";
                     setTimeout(() => inputArea.style.backgroundColor = "white", 300);
                 } else alert('Clipboard trống!');
-            } catch (err) {
-                alert('Vui lòng nhấn giữ vào ô nhập liệu và chọn "Dán".');
-                inputArea.focus();
-            }
+            } catch (error) {
+    console.error(error); // Log ra console để xem
+    alert('Lỗi kết nối hoặc xử lý: ' + error.message);
+}
         }
 
         function clearInput() {
@@ -200,8 +200,10 @@
                     }
                     if(data.converted === 0) alert('Không tìm thấy link Shopee hợp lệ.');
                 } else {
-                    alert('Lỗi: ' + data.error);
-                }
+    // Ưu tiên hiện data.error, nếu không có thì hiện toàn bộ data để debug
+    const msg = data.error || data.message || JSON.stringify(data);
+    alert('Lỗi Server: ' + msg);
+}
             } catch (error) {
                 alert('Lỗi kết nối Server.');
             } finally {
