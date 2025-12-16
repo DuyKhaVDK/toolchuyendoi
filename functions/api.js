@@ -5,21 +5,28 @@ const serverless = require('serverless-http');
 const axios = require('axios');
 const crypto = require('crypto');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 
 const app = express();
 
 // --- CẤU HÌNH ---
-const APP_ID = '17301060084';     // Điền lại App ID
-const APP_SECRET = '2OI7GNRRDK7VDMZRU3AYQ7RPPAPN4VBK'; // Điền lại Secret
+const APP_ID = 'YOUR_APP_ID';     // Nhớ điền lại App ID
+const APP_SECRET = 'YOUR_SECRET'; // Nhớ điền lại Secret
 const SHOPEE_API_URL = 'https://open-api.affiliate.shopee.vn/graphql';
 
 app.use(cors());
-app.use(bodyParser.json());
 
-// --- MẸO QUAN TRỌNG: LOG ĐỂ DEBUG ---
+// --- THAY ĐỔI QUAN TRỌNG: PARSE BODY THỦ CÔNG ---
+// Thay vì dùng body-parser, ta dùng express.json() và thêm middleware xử lý lỗi
+app.use(express.json()); 
+app.use(express.urlencoded({ extended: true }));
+
+// Middleware Log để Debug (Xem server nhận được cái gì)
 app.use((req, res, next) => {
-    console.log(`[DEBUG] Incoming Request: ${req.method} ${req.path}`);
+    console.log(`[DEBUG] Method: ${req.method} | URL: ${req.url}`);
+    // Log xem body có dữ liệu không
+    if (req.body) {
+        console.log('[DEBUG] Body received type:', typeof req.body);
+    }
     next();
 });
 
@@ -80,15 +87,35 @@ async function getShopeeShortLink(originalUrl, subIds = []) {
     } catch (e) { return null; }
 }
 
-// --- API ROUTE (SỬA LẠI: DÙNG MẢNG ĐƯỜNG DẪN) ---
-// Chấp nhận cả 2 trường hợp đường dẫn mà Netlify có thể gửi vào
+// --- API ROUTE ---
 const apiPath = ['/convert-text', '/api/convert-text', '/.netlify/functions/api/convert-text'];
 
 app.post(apiPath, async (req, res) => {
-    console.log('[DEBUG] Processing convert-text...'); // Log để biết code đã chạy vào đây
     
-    const { text, subIds } = req.body;
-    if (!text) return res.status(400).json({ error: 'Empty text' });
+    // --- KHẮC PHỤC LỖI EMPTY TEXT TẠI ĐÂY ---
+    let bodyData = req.body;
+
+    // Nếu body là chuỗi (do Netlify gửi sai định dạng), ta tự parse nó
+    if (typeof bodyData === 'string') {
+        try {
+            bodyData = JSON.parse(bodyData);
+        } catch (e) {
+            console.error('JSON Parse Error:', e);
+        }
+    }
+
+    // Nếu parse xong mà vẫn không có text thì mới báo lỗi
+    const text = bodyData ? bodyData.text : null;
+    const subIds = bodyData ? bodyData.subIds : [];
+
+    if (!text) {
+        console.error('[ERROR] Body content missing or invalid:', bodyData);
+        return res.status(400).json({ 
+            error: 'Empty text', 
+            debug: { receivedType: typeof req.body, receivedBody: req.body } 
+        });
+    }
+    // ------------------------------------------
 
     const urlRegex = /(https?:\/\/(?:www\.)?(?:shopee\.vn|vn\.shp\.ee|shp\.ee|s\.shopee\.vn)[^\s]*)/gi;
     const uniqueLinks = [...new Set(text.match(urlRegex) || [])];
@@ -114,9 +141,6 @@ app.post(apiPath, async (req, res) => {
     res.json({ success: true, newText, totalLinks: uniqueLinks.length, converted: successCount, details: conversions });
 });
 
-// Route mặc định cho các request khác (để debug)
-app.use('*', (req, res) => {
-    res.status(404).json({ error: 'Route not found', path: req.path });
-});
+app.use('*', (req, res) => res.status(404).json({ error: 'Not found', path: req.path }));
 
 module.exports.handler = serverless(app);
